@@ -60,6 +60,7 @@ from .tools import (
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
+MAX_EVENT_TEXT = 4000
 
 _encoder = tiktoken.get_encoding("cl100k_base")
 
@@ -256,6 +257,27 @@ def append_history(
 def _canonical_error(error: str) -> str:
     """Extract a stable error fingerprint for repeat detection."""
     return error.split("\n", 1)[0]
+
+
+def _parse_tool_arguments(raw_args):
+    """Parse tool-call arguments JSON once and return (parsed, error)."""
+    try:
+        return json.loads(raw_args), None
+    except (json.JSONDecodeError, TypeError) as exc:
+        return None, exc
+
+
+def _event_text_payload(field: str, text: str | None) -> dict:
+    """Build a bounded event payload for free-form text fields."""
+    content = text or ""
+    truncated = len(content) > MAX_EVENT_TEXT
+    if truncated:
+        content = content[:MAX_EVENT_TEXT]
+    return {
+        field: content,
+        f"{field}_length": len(text or ""),
+        f"{field}_truncated": truncated,
+    }
 
 
 def estimate_tokens(messages: list, tools: list | None = None) -> int:
@@ -1387,24 +1409,30 @@ def handle_tool_call(
     """Execute a single tool call and return (tool_msg, metadata).
 
     tool_msg is the message dict for the LLM conversation.
-    metadata has stable keys: name, arguments, elapsed, succeeded.
+    metadata has stable keys: name, tool_call_id, arguments, elapsed, succeeded, result.
     """
     name = tool_call.function.name
     raw_args = tool_call.function.arguments
 
-    try:
-        parsed_args = json.loads(raw_args)
-    except (json.JSONDecodeError, TypeError) as e:
+    parsed_args, parse_error = _parse_tool_arguments(raw_args)
+    if parse_error is not None:
         if verbose:
-            fmt.tool_error(name, f"invalid JSON: {e}")
-        error_content = f"error: invalid JSON in tool arguments: {e}"
+            fmt.tool_error(name, f"invalid JSON: {parse_error}")
+        error_content = f"error: invalid JSON in tool arguments: {parse_error}"
         return (
             {
                 "role": "tool",
                 "tool_call_id": tool_call.id,
                 "content": error_content,
             },
-            {"name": name, "arguments": None, "elapsed": 0.0, "succeeded": False},
+            {
+                "name": name,
+                "tool_call_id": tool_call.id,
+                "arguments": None,
+                "elapsed": 0.0,
+                "succeeded": False,
+                "result": error_content,
+            },
         )
 
     _skip_generic_log = name in ("think", "todo", "snapshot")
@@ -1462,9 +1490,11 @@ def handle_tool_call(
         },
         {
             "name": name,
+            "tool_call_id": tool_call.id,
             "arguments": parsed_args,
             "elapsed": elapsed,
             "succeeded": succeeded,
+            "result": result,
         },
     )
 
@@ -3811,7 +3841,7 @@ def run_agent_loop(
                 {
                     "turn": turns,
                     "type": "reasoning",
-                    "text_length": len(msg.content),
+                    **_event_text_payload("text", msg.content),
                 },
             )
 
@@ -3854,7 +3884,16 @@ def run_agent_loop(
                 return None, True
 
             _tc_name = tool_call.function.name
-            _emit(EVENT_TOOL_START, {"name": _tc_name, "turn": turns})
+            tool_args, _ = _parse_tool_arguments(tool_call.function.arguments)
+            _emit(
+                EVENT_TOOL_START,
+                {
+                    "name": _tc_name,
+                    "turn": turns,
+                    "tool_call_id": tool_call.id,
+                    "arguments": tool_args,
+                },
+            )
 
             tool_msg, tool_meta = handle_tool_call(
                 tool_call,
@@ -3883,7 +3922,10 @@ def run_agent_loop(
                     {
                         "name": tool_meta["name"],
                         "turn": turns,
+                        "tool_call_id": tool_meta["tool_call_id"],
+                        "arguments": tool_meta["arguments"],
                         "elapsed": tool_meta["elapsed"],
+                        **_event_text_payload("result", tool_meta["result"]),
                     },
                 )
             else:
@@ -3892,7 +3934,9 @@ def run_agent_loop(
                     {
                         "name": tool_meta["name"],
                         "turn": turns,
-                        "error": tool_msg["content"][:500],
+                        "tool_call_id": tool_meta["tool_call_id"],
+                        "arguments": tool_meta["arguments"],
+                        **_event_text_payload("error", tool_meta["result"]),
                     },
                 )
 
