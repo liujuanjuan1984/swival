@@ -60,6 +60,7 @@ from .tools import (
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
+MAX_EVENT_TEXT = 4000
 
 _encoder = tiktoken.get_encoding("cl100k_base")
 
@@ -256,6 +257,19 @@ def append_history(
 def _canonical_error(error: str) -> str:
     """Extract a stable error fingerprint for repeat detection."""
     return error.split("\n", 1)[0]
+
+
+def _event_text_payload(field: str, text: str | None) -> dict:
+    """Build a bounded event payload for free-form text fields."""
+    content = text or ""
+    truncated = len(content) > MAX_EVENT_TEXT
+    if truncated:
+        content = content[:MAX_EVENT_TEXT]
+    return {
+        field: content,
+        f"{field}_length": len(text or ""),
+        f"{field}_truncated": truncated,
+    }
 
 
 def estimate_tokens(messages: list, tools: list | None = None) -> int:
@@ -3811,7 +3825,7 @@ def run_agent_loop(
                 {
                     "turn": turns,
                     "type": "reasoning",
-                    "text_length": len(msg.content),
+                    **_event_text_payload("text", msg.content),
                 },
             )
 
@@ -3854,7 +3868,19 @@ def run_agent_loop(
                 return None, True
 
             _tc_name = tool_call.function.name
-            _emit(EVENT_TOOL_START, {"name": _tc_name, "turn": turns})
+            try:
+                tool_args = json.loads(tool_call.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                tool_args = None
+            _emit(
+                EVENT_TOOL_START,
+                {
+                    "name": _tc_name,
+                    "turn": turns,
+                    "tool_call_id": tool_call.id,
+                    "arguments": tool_args,
+                },
+            )
 
             tool_msg, tool_meta = handle_tool_call(
                 tool_call,
@@ -3883,7 +3909,10 @@ def run_agent_loop(
                     {
                         "name": tool_meta["name"],
                         "turn": turns,
+                        "tool_call_id": tool_call.id,
+                        "arguments": tool_args,
                         "elapsed": tool_meta["elapsed"],
+                        **_event_text_payload("result", tool_msg["content"]),
                     },
                 )
             else:
@@ -3892,7 +3921,9 @@ def run_agent_loop(
                     {
                         "name": tool_meta["name"],
                         "turn": turns,
-                        "error": tool_msg["content"][:500],
+                        "tool_call_id": tool_call.id,
+                        "arguments": tool_args,
+                        **_event_text_payload("error", tool_msg["content"]),
                     },
                 )
 

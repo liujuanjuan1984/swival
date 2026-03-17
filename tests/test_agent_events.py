@@ -179,7 +179,9 @@ class TestTextChunk:
             if k == EVENT_STATUS_UPDATE and d.get("type") == "reasoning"
         ]
         assert len(reasoning_events) == 1
+        assert reasoning_events[0][1]["text"] == "reasoning text"
         assert reasoning_events[0][1]["text_length"] == len("reasoning text")
+        assert reasoning_events[0][1]["text_truncated"] is False
 
 
 class TestToolStartFinish:
@@ -219,12 +221,19 @@ class TestToolStartFinish:
         assert len(start_events) == 1
         assert start_events[0]["name"] == "think"
         assert start_events[0]["turn"] == 1
+        assert start_events[0]["tool_call_id"] == "call_1"
+        assert start_events[0]["arguments"] == {"thought": "planning"}
 
         assert len(finish_events) == 1
         assert finish_events[0]["name"] == "think"
         assert finish_events[0]["turn"] == 1
         assert "elapsed" in finish_events[0]
         assert isinstance(finish_events[0]["elapsed"], float)
+        assert finish_events[0]["tool_call_id"] == "call_1"
+        assert finish_events[0]["arguments"] == {"thought": "planning"}
+        assert finish_events[0]["result"].startswith("{")
+        assert finish_events[0]["result_length"] >= len(finish_events[0]["result"])
+        assert finish_events[0]["result_truncated"] is False
 
 
 class TestToolError:
@@ -260,8 +269,13 @@ class TestToolError:
         assert len(error_events) == 1
         assert error_events[0]["name"] == "read_file"
         assert error_events[0]["turn"] == 1
+        assert error_events[0]["tool_call_id"] == "call_err"
+        assert error_events[0]["arguments"] == {
+            "file_path": "/nonexistent/path/file.txt"
+        }
         assert "error" in error_events[0]
         assert error_events[0]["error"].startswith("error:")
+        assert error_events[0]["error_length"] >= len(error_events[0]["error"])
 
 
 class TestCancelFlag:

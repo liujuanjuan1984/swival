@@ -1160,10 +1160,20 @@ def _map_event_to_sse(
             "type": kind,
             "tool": data.get("name", ""),
         }
-        if "elapsed" in data:
-            meta["elapsed"] = data["elapsed"]
-        if "error" in data:
-            meta["error"] = data["error"]
+        for key in (
+            "turn",
+            "tool_call_id",
+            "arguments",
+            "elapsed",
+            "result",
+            "result_length",
+            "result_truncated",
+            "error",
+            "error_length",
+            "error_truncated",
+        ):
+            if key in data:
+                meta[key] = data[key]
         evt = TaskStatusUpdateEvent(
             task_id=task_id,
             context_id=context_id,

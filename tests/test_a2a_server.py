@@ -962,9 +962,25 @@ class TestSendStreamingMessage:
             # The session should have event_callback set by the server
             if self.event_callback:
                 self.event_callback("text_chunk", {"text": "partial"})
-                self.event_callback("tool_start", {"name": "read_file"})
                 self.event_callback(
-                    "tool_finish", {"name": "read_file", "elapsed": 0.1}
+                    "tool_start",
+                    {
+                        "name": "read_file",
+                        "tool_call_id": "call_1",
+                        "arguments": {"file_path": "hello.txt"},
+                    },
+                )
+                self.event_callback(
+                    "tool_finish",
+                    {
+                        "name": "read_file",
+                        "tool_call_id": "call_1",
+                        "arguments": {"file_path": "hello.txt"},
+                        "elapsed": 0.1,
+                        "result": "file body",
+                        "result_length": 9,
+                        "result_truncated": False,
+                    },
                 )
             return _make_result(f"answer: {q}")
 
@@ -996,6 +1012,26 @@ class TestSendStreamingMessage:
             and e[1].get("metadata", {}).get("type") in ("tool_start", "tool_finish")
         ]
         assert len(status_events) >= 2
+        tool_start = next(
+            e[1]["metadata"]
+            for e in status_events
+            if e[1]["metadata"]["type"] == "tool_start"
+        )
+        assert tool_start["tool"] == "read_file"
+        assert tool_start["tool_call_id"] == "call_1"
+        assert tool_start["arguments"] == {"file_path": "hello.txt"}
+
+        tool_finish = next(
+            e[1]["metadata"]
+            for e in status_events
+            if e[1]["metadata"]["type"] == "tool_finish"
+        )
+        assert tool_finish["tool"] == "read_file"
+        assert tool_finish["tool_call_id"] == "call_1"
+        assert tool_finish["arguments"] == {"file_path": "hello.txt"}
+        assert tool_finish["result"] == "file body"
+        assert tool_finish["result_length"] == 9
+        assert tool_finish["result_truncated"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1378,7 +1414,13 @@ class TestStatusUpdateMetadata:
             if self.event_callback:
                 self.event_callback(
                     "status_update",
-                    {"turn": 1, "type": "reasoning", "text_length": 42},
+                    {
+                        "turn": 1,
+                        "type": "reasoning",
+                        "text": "working notes",
+                        "text_length": 42,
+                        "text_truncated": False,
+                    },
                 )
             return _make_result(f"answer: {q}")
 
@@ -1401,7 +1443,9 @@ class TestStatusUpdateMetadata:
         ]
         assert len(reasoning_events) == 1
         meta = reasoning_events[0][1]["metadata"]
+        assert meta["text"] == "working notes"
         assert meta["text_length"] == 42
+        assert meta["text_truncated"] is False
         assert meta["turn"] == 1
 
 
