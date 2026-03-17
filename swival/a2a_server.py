@@ -1156,9 +1156,24 @@ def _map_event_to_sse(
         return [_sse_frame("TaskArtifactUpdateEvent", evt.to_wire())]
 
     if kind in (EVENT_TOOL_START, EVENT_TOOL_FINISH, EVENT_TOOL_ERROR):
-        meta = dict(data)
-        meta["type"] = kind
-        meta.setdefault("tool", data.get("name", ""))
+        meta: dict[str, Any] = {
+            "type": kind,
+            "tool": data.get("name", ""),
+        }
+        for key in (
+            "turn",
+            "tool_call_id",
+            "arguments",
+            "elapsed",
+            "result",
+            "result_length",
+            "result_truncated",
+            "error",
+            "error_length",
+            "error_truncated",
+        ):
+            if key in data:
+                meta[key] = data[key]
         evt = TaskStatusUpdateEvent(
             task_id=task_id,
             context_id=context_id,
